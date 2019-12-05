@@ -1,4 +1,9 @@
-/* 下面声明所有将被在trap_init函数中挂载的地址，函数的具体定义在kernel/asm.s中 */
+#include <asm/system.h>
+#include <asm/io.h>
+
+/* 下面声明所有将被在trap_init函数中挂载的地址，函数的具体定义在kernel/asm.s中 
+ * 函数的声明在本文件中，定义在其他文件中，这种做法是可以的。
+ */
 void divide_error(void);
 void debug(void);
 void nmi(void);

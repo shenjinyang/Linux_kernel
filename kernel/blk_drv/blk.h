@@ -21,12 +21,14 @@ struct blk_dev_struct {
 	struct request * current_request;
 };
 
+extern struct blk_dev_struct blk_dev[NR_BLK_DEV];
+
 #ifdef MAJOR_NR
 
 #if (MAJOR_NR == 1)
 /* ram disk */
 #define DEVICE_NAME "ramdisk"				// 设备名称
-#define DEVICE_REQUEST do_rd_request		// 设备请求项处理函数
+#define DEVICE_REQUEST do_rd_request		// 设备请求项处理函数，只看到了函数定义，没有看到函数原型，很奇怪
 #define DEVICE_NR(device) ((device) & 7)	// 子设备号（0 - 7）
 #define DEVICE_ON(device)					// 开启设备（虚拟盘无需开启和关闭，所以被定义为空）
 #define DEVICE_OFF(device)					// 关闭设备

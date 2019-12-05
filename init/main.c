@@ -47,7 +47,7 @@ static char printbuf[1024];				//静态字符数组，用作内核显示信息�
 extern int mem_init(long start, long end);
 extern void blk_dev_init(void);
 extern void chr_dev_init(void);
-extern void tty_init(void);
+extern void hd_init(void);
 extern long kernel_mktime(struct tm * tm);
 extern long startup_time;
 
@@ -74,6 +74,9 @@ inb_p(0x71); \
 /* 将BCD码转换为十进制数，这里只转换了个位和十位，那么表示天数的百位呢？ */
 #define BCD_TO_BIN(val) ((val) = ((val)&15) + ((val)>>4)*10)
 
+/* 只有函数调用出现在函数定义之前，才需要提前给出函数原型，下面的函数time_init，
+ * 其先给出了函数定义，然后才在main.c中调用，那么这里就不需要提前给出函数原型。
+ */
 static void time_init(void)
 {
 	struct tm time;
@@ -127,4 +130,11 @@ void main(void)
 	tty_init();
 	time_init();
 	sched_init();
+	buffer_init(buffer_memory_end);
+	hd_init();
+	floppy_init();
+	sti();
+
+	/* 下面开始精彩的move_to_user_mode */
+	move_to_user_mode();
 }

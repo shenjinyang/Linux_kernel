@@ -1,3 +1,17 @@
+#ifndef _SCHED_H
+#define _SCHED_H
+
+/* linux内核所支持的最大任务数 */
+#define NR_TASKS 64
+
+/* 定义系统时钟滴答频率（100赫兹，每个滴答10ms） */
+#define HZ 100
+
+#include <linux/head.h>
+#include <linux/fs.h>
+#include <linux/mm.h>
+
+extern void sched_init(void);
 extern void trap_init(void);
 
 /* 暂时不知道这个是干啥的 */
@@ -116,8 +130,11 @@ struct task_struct {
    * 如果进程在内核态使用诸如递归等需要大量使用栈空间的操作，就可能会导致内核栈溢出，从而覆盖进程状态
    * 信息从而导致系统崩溃。
    * ----------------------------------------------------------
-   * 其次是es/cs/ss/ds/fs/gs 6个寄存器都被初始化为0x17，即任务0的代码段和数据段的段选择符都是0x17，因为
-   * 全局段描述符表gdt的前四项被内核占用，所以任务0的
+   * 其次是es/cs/ss/ds/fs/gs 6个寄存器都被初始化为0x17，即任务0的代码段和数据段的段选择符都是0x17，
+   * 二进制为0000 0000 0001 0111，索引值为2，正好定位到ldt[1]，即代码段描述符（代码段和数据段基地址、
+   * 段限长都相同）。
+   * ----------------------------------------------------------
+   * 宏定义_LDT(0)是任务0的ldt段描述符在全局描述符表中的偏移值，也就是ldt0的段选择子
    */
   {0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,(long)&pg_dir,\
    0,0,0,0,0,0,0,0, \
@@ -127,5 +144,17 @@ struct task_struct {
   }, \
 }
 
+/* FIRST_TSS_ENTRY表示任务0的tss段描述符在gdt中的索引，因为前四项被内核使用，所以从gdt[4]开始 
+ * 同理ldt的段描述符被存储在gdt[5]。
+ */
 #define FIRST_TSS_ENTRY 4
 #define FIRST_LDT_ENTRY (FIRST_TSS_ENTRY + 1)
+
+/* FIRST_TSS_ENTRY<<3是指前4个内核段的段描述符使用了一共32个字节，而(unsigned long) n)<<4是因为每个进程都会有一个LDT和TSS，
+ * 即每个进程会使用掉8*2=16个字节，总结就是n*16+32即为第n个进程的TSS描述符在GDT表中的偏移地址；ldt0也是一样的分析。
+ */
+#define _TSS(n) ((((unsigned long) n)<<4)+(FIRST_TSS_ENTRY))
+#define _LDT(n) ((((unsigned long) n)<<4)+(FIRST_LDT_ENTRY))
+
+#define ltr(n) __asm__("ltr %%ax"::"a" (_TSS(n)))
+#define lldt(n) __asm__("lldt %%ax"::"a" (_LDT(n)))
