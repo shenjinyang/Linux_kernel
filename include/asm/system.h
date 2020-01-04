@@ -54,6 +54,9 @@ __asm__ ("movl %%esp,%%eax\n\t" \
 /* 开中断 */
 #define sti() __asm__ ("sti"::)
 
+/* 关中断 */
+#define cli() __asm__ ("cli"::)
+
 /* 设置门描述符宏
  * 根据参数中的中断或异常处理程序地址addr、门描述符类型type和特权级别dpl，设置位于gate_addr处的门描述符；
  * 参数：gate_addr：门描述符地址；type：门描述符类型；dlp：门描述符特权级别；addr：处理过程偏移地址注意此处的

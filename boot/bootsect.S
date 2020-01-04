@@ -391,7 +391,7 @@ msg1:
 swap_dev:
 				.word 	SWAP_DEV
 root_dev:
-				.word		ROOT_DEV
+				.word	ROOT_DEV
 boot_flag:
 				.word 	0XAA55
 

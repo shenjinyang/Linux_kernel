@@ -20,3 +20,9 @@ typedef char *va_list;
 
 void va_end(va_list);			// 声明函数va_end，具体定义在gunlib中。
 #define va_end(AP)
+
+#define va_arg(AP, TYPE)						\
+ (AP += __va_rounded_size (TYPE),					\
+  *((TYPE *) (AP - __va_rounded_size (TYPE))))
+
+#endif /* _STDARG_H */

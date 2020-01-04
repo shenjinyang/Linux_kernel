@@ -3,16 +3,34 @@
 
 /* linux内核所支持的最大任务数 */
 #define NR_TASKS 64
+/* 每个任务的长度，为64MB */
+#define TASK_SIZE 0x04000000
 
 /* 定义系统时钟滴答频率（100赫兹，每个滴答10ms） */
 #define HZ 100
 
+#define FIRST_TASK task[0]
+#define LAST_TASK task[NR_TASKS - 1]
+
 #include <linux/head.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <signal.h>
+
+/* 定义进程的各种状态 */
+#define TASK_RUNNING				0
+#define TASK_INTERRUPTIBLE			1
+#define TASK_UNINTERRUPTIBLE		2
+#define TASK_ZOMBIE					3
+#define TASK_STOPPED				4
+
+extern int copy_page_tables(unsigned long from, unsigned long to, long size);
+extern int free_page_tables(unsigned long from, unsigned long size);
 
 extern void sched_init(void);
+extern void schedule(void);
 extern void trap_init(void);
+extern void panic(const char * str);
 
 /* 暂时不知道这个是干啥的 */
 struct i387_struct {
@@ -47,11 +65,46 @@ struct tss_struct {
 };
 
 struct task_struct {
-	/* 任务0的ldt成员：局部描述符表，第0项-空，第1项-代码段，第2项-数据段 */
+/* these are hardcoded - don't touch */
+	long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
+	long counter;
+	long priority;
+	long signal;
+	struct sigaction sigaction[32];
+	long blocked;	/* bitmap of masked signals */
+/* various fields */
+	int exit_code;
+	unsigned long start_code,end_code,end_data,brk,start_stack;
+	long pid,pgrp,session,leader;
+	int	groups[NGROUPS];
+	/* 
+	 * pointers to parent process, youngest child, younger sibling,
+	 * older sibling, respectively.  (p->father can be replaced with 
+	 * p->p_pptr->pid)
+	 */
+	struct task_struct	*p_pptr, *p_cptr, *p_ysptr, *p_osptr;
+	unsigned short uid,euid,suid;
+	unsigned short gid,egid,sgid;
+	unsigned long timeout,alarm;
+	long utime,stime,cutime,cstime,start_time;
+	struct rlimit rlim[RLIM_NLIMITS]; 
+	unsigned int flags;	/* per process flags, defined below */
+	unsigned short used_math;
+/* file system info */
+	int tty;		/* -1 if no tty, so it must be signed */
+	unsigned short umask;
+	struct m_inode * pwd;
+	struct m_inode * root;
+	struct m_inode * executable;
+	struct m_inode * library;
+	unsigned long close_on_exec;
+	struct file * filp[NR_OPEN];
+/* ldt for this task 0 - zero 1 - cs 2 - ds&ss */
 	struct desc_struct ldt[3];
-	/* 任务0的tss成员 */
+/* tss for this task */
 	struct tss_struct tss;
 };
+
 
 /* 对于任务0来说，它的任务数据是在sched.h中写死的，被定义为宏定义INIT_TASK */
 #define INIT_TASK \
@@ -144,6 +197,14 @@ struct task_struct {
   }, \
 }
 
+extern struct task_struct *task[NR_TASKS];			// 任务指针数组
+extern struct task_struct *last_task_used_math;		// 是一个用过协处理器的进程
+extern struct task_struct *current;					// 当前运行进程结构指针变量
+extern unsigned long volatile jiffies;				// 从开机开始算起的滴答数（每滴答10ms）
+
+extern void sleep_on(struct task_struct ** p);
+extern void wake_up(struct task_struct **p);
+
 /* FIRST_TSS_ENTRY表示任务0的tss段描述符在gdt中的索引，因为前四项被内核使用，所以从gdt[4]开始 
  * 同理ldt的段描述符被存储在gdt[5]。
  */
@@ -158,3 +219,110 @@ struct task_struct {
 
 #define ltr(n) __asm__("ltr %%ax"::"a" (_TSS(n)))
 #define lldt(n) __asm__("lldt %%ax"::"a" (_LDT(n)))
+
+/* 该宏定义作用是将切换任务到n中。
+ * 输出：空
+ * 输入：%0 - 指向tmp结构体；
+ * 		 %1 - 指向tmp结构体中的b；
+ *       %2 - dx，新任务你的TSS段选择子；
+ * 		 %3 - ecx， 新任务的任务结构体指针
+ * 这里要注意的是"ljmp %0\n\t"，执行该行后，CPU资源就会分给被切换的进程，
+ * 注意改行并不是switch_to的最后一行，其后还有语句，那么也就是说，在执行
+ * 该行后，调用switch_to函数的进程被切换出CPU停止执行，一旦它被重新调度，
+ * 它就会从紧接着的"cmpl"语句开始执行，然后退出switch_to函数。
+ */
+#define switch_to(n) {\
+struct {long a, b} __tmp;
+__asm__("cmpl %%ecx, _current\n\t" \
+		"je 1f\n\t" \
+		"movw %%dx, %1\n\t" \
+		"xchgl %%ecx, _current\n\t" \
+		"ljmp %0\n\t" \
+		"cmpl %%ecx, _last_task_used_math\n\t" \
+		"jne 1f\n\t" \
+		"clts \n" \
+		"1:" \
+		: \
+		:"m"(*&__tmp.a), "m"(*&__tmp.b), \
+		 "d"(_TSS(n)), "c"((long) task[n])); \
+		 }
+
+/* 设置位于地址addr处描述符中的段基地址字段（段基地址是base）
+ * 没有输出寄存器
+ * 输入寄存器：%0：地址addr偏移2处
+ *             %1：地址addr偏移4处
+ *             %2：地址addr偏移7处
+ *             %3：edx - 段基地址base
+ */
+#define _set_base(addr,base) \
+__asm__("movw %%dx,%0\n\t" \
+	"rorl $16,%%edx\n\t" \
+	"movb %%dl,%1\n\t" \
+	"movb %%dh,%2" \
+	::"m" (*((addr)+2)), \
+	  "m" (*((addr)+4)), \
+	  "m" (*((addr)+7)), \
+	  "d" (base) \
+	:"dx")
+
+/* 设置位于地址addr处描述符中的段限长字段（段限长是limit）
+ * 没有输出寄存器
+ * 输入寄存器：%0：地址addr
+ *             %1：地址addr偏移6处
+ *             %2：edx - 段限长值
+ */
+#define _set_limit(addr, limit) \
+__asm__("movw %%dx, %0\n\t" \
+		 "rorl $16, %%edx\n\t" \
+		 "movb %1, %%dh\n\t" \
+		 "andb $0xf0, %%dh\n\t" \
+		 "orb %%dh, %%dl\n\t" \
+		 "movb %%dl, %1" \
+		: \
+		:"m" (*(addr)), \
+		 "m" (*((addr) + 6)), \
+		 "d" (limit) \
+		:"dx")
+
+
+/* _set_limit的第二个参数右移12位是因为段描述符中的G位被置位，表明粒度为4KB */
+#define set_base(ldt, base) _set_base( ((char *)&(ldt)), base )
+#define set_limit(ldt, limit) _set_limit( ((char *)&(ldt)), (limit-1)>>12 )
+
+/* 从地址addr处取得段基地址，与set_base功能相反
+ * 输出EDX：            %0 - 存放基地址
+ * 输入为内存，其中：%1 - 地址addr偏移2
+ *                   %2 - 地址addr偏移4
+ *                   %3 - 地址addr偏移7
+ */
+#define _get_base(addr) ({\
+unsigned long __base; \
+__asm__("movb %3, %%dh\n\t" \
+		"movb %2, %%dl\n\t" \
+		"shll $16, %%edx\n\t" \
+		"movw %1, %%dx" \
+		:"=d" (__base) \
+		:"m" (*((addr) + 2)), \
+		 "m" (*((addr) + 4)), \
+		 "m" (*((addr) + 7))); \
+		 __base;})
+
+#define get_base(ldt) _get_base( ((char *)&(ldt)) )
+
+/* 取段选择符segment指定的描述符中的段限长值：
+ * lsl指令是Load Segment Limit的缩写，它从指定段描述符中取出分散的段限长比特位
+ * 并拼成完整的段限长值放在指定的寄存器中，所得的段限长是实际字节数减1，所以
+ * 这里还要加1后才返回。
+ * %0：存放段限长值（字节数）
+ * %1：段选择符segment
+ * 语句中的r是指使用动态分配的寄存器
+ */
+#define get_limit(segment) ({ \
+unsigned long __limit; \
+__asm__("lsll %1, %0\n\t" \
+		"incl %0" \
+		:"=r" (__limit) \
+		:"r"(segment)); \
+		__limit;})
+
+#endif

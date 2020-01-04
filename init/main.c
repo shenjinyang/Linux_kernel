@@ -21,6 +21,7 @@
  * some others too.
  */
 
+/* 由于不能在move_to_user_mode后使用函数调用，故用嵌入式汇编代码实现函数功能 */
 static inline _syscall0(int,fork)
 static inline _syscall0(int,pause)
 static inline _syscall1(int,setup,void *,BIOS)
@@ -42,7 +43,8 @@ static inline _syscall0(int,sync)
 
 #include <string.h>
 
-static char printbuf[1024];				//静态字符数组，用作内核显示信息的缓存。
+/* 静态字符数组，用作内核显示信息的缓存。 */
+static char printbuf[1024];
 
 extern int mem_init(long start, long end);
 extern void blk_dev_init(void);
@@ -120,6 +122,7 @@ void main(void)
 		buffer_memory_end = 2*1024*1024;
 	else
 		buffer_memory_end = 1*1024*1024;
+	main_memory_start = buffer_memory_end;
 #ifdef RAMDISK										// 如果设置了虚拟内存盘，那么还要从主内存中分配出去一块作为虚拟内存盘。
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
@@ -137,4 +140,32 @@ void main(void)
 
 	/* 下面开始精彩的move_to_user_mode */
 	move_to_user_mode();
+
+	/* fork函数用来创建子进程，这里就是有任务0创建任务1；fork函数有两个返回值，
+	 * 在父进程中其返回子进程的PID，在子进程中返回0，所以下面的if语句的含义是：
+	 * 如果是子进程，则执行init函数，即在任务1中执行init函数。
+	 */
+	if (!fork()) {
+		init();
+	}
+
+	/* pause系统调用会把任务0转换成可中断状态，再执行调度函数，但是调度函数只要发现系统中没有
+	 * 其他任务可运行就会切换回任务0，而不依赖于任务0的状态。
+	 */
+	for (; ;)
+	{
+		__asm__("int $0x80"::"a" (__NR_pause):"ax");
+	}
+}
+
+static int printf(const char *fmt, ...)
+{
+	va_list args;
+}
+
+void init(void)
+{
+	int pid, i;
+
+	setup((void *) &drive_info);
 }
